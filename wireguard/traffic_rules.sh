@@ -1,40 +1,5 @@
 #!/bin/sh
 
-mask2cidr() {
-  b=0
-  IFS=.
-  for dec in $1 ; do
-    case $dec in
-      255) b=$((b+8));;
-      254) b=$((b+7));;
-      252) b=$((b+6));;
-      248) b=$((b+5));;
-      240) b=$((b+4));;
-      224) b=$((b+3));;
-      192) b=$((b+2));;
-      128) b=$((b+1));;
-      0);;
-      *) echo "Error: $dec is not recognized"; exit 1
-    esac
-  done
-  echo "$b"
-}
-
-get_lan_prefix() {
-  ip="$(nvram get lan_ipaddr | sed 's/ *//g')"
-  mask="$(nvram get lan_netmask | sed 's/ *//g')"
-  len="$(mask2cidr "${mask}")"
-
-  echo "${ip}/${len}"
-}
-
-get_wan_prefix() {
-  wan="$(nvram get wan_ifname)"
-  prefix="$(ip addr show "$wan" | grep -E '^ +inet' | awk '{print $2}')"
-
-  echo "$prefix"
-}
-
 _enable() {
   . "$(dirname "$0")/conf.sh"
   
@@ -42,22 +7,7 @@ _enable() {
 
   echo -n "Setting up WireGuard traffic rules... "
 
-  iptables -I INPUT -i ${IFACE} -j ACCEPT
-  iptables -t nat -I POSTROUTING -o ${IFACE} -j SNAT --to ${ADDR}
-  iptables -t mangle -I POSTROUTING -o ${IFACE} -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
-
-  ip route add default dev ${IFACE} table 51
-  ip rule add to ${ENDPOINT_ADDR} lookup main pref 30
-  ip rule add to $(get_lan_prefix) lookup main pref 30
-
-  wan_prefix="$(get_wan_prefix)"
-
-  if [ -n "$wan_prefix" ]; then
-    ip rule add to $wan_prefix lookup main pref 30
-  fi
-
-  ip rule add to all lookup 51 pref 40
-  ip route flush cache
+  iptables -t nat -A PREROUTING -d ${ADDR} -j vserver
 
   echo "done"
 }
@@ -67,21 +17,7 @@ _disable() {
 
   echo -n "Removing WireGuard traffic rules... "
 
-  iptables -D INPUT -i ${IFACE} -j ACCEPT
-  iptables -t nat -D POSTROUTING -o ${IFACE} -j SNAT --to ${ADDR}
-
-  ip route del default dev ${IFACE} table 51
-  ip rule del to ${ENDPOINT_ADDR} lookup main pref 30
-  ip rule del to $(get_lan_prefix) lookup main pref 30
-
-  wan_prefix="$(get_wan_prefix)"
-
-  if [ -n "$wan_prefix" ]; then
-    ip rule del to $wan_prefix lookup main pref 30
-  fi
-
-  ip rule del to all lookup 51 pref 40
-  ip route flush cache
+  iptables -t nat -D PREROUTING -d ${ADDR} -j vserver
 
   echo "done"
 }
